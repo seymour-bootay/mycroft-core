@@ -43,13 +43,13 @@ class ChromecastService(AudioBackend):
             LOG.info('Couldn\'t find chromecast ' + identifier)
             self.connection_attempts += 1
             time.sleep(10)
-            self.emitter.emit(Message('ChromecastServiceConnect'))
+            self.bus.emit(Message('ChromecastServiceConnect'))
             return
 
-    def __init__(self, config, emitter, name='chromecast', cast=None):
-        super(ChromecastService, self).__init__(config, emitter)
+    def __init__(self, config, bus, name='chromecast', cast=None):
+        super(ChromecastService, self).__init__(config, bus)
         self.connection_attempts = 0
-        self.emitter = emitter
+        self.bus = bus
         self.config = config
         self.name = name
 
@@ -59,8 +59,8 @@ class ChromecastService(AudioBackend):
             self.cast = cast
         else:
             self.cast = None
-            self.emitter.on('ChromecastServiceConnect', self._connect)
-            self.emitter.emit(Message('ChromecastServiceConnect'))
+            self.bus.on('ChromecastServiceConnect', self._connect)
+            self.bus.emit(Message('ChromecastServiceConnect'))
 
     def supported_uris(self):
         """ Return supported uris of chromecast. """
@@ -148,7 +148,7 @@ class ChromecastService(AudioBackend):
         self.cast.disconnect()
 
 
-def autodetect(config, emitter):
+def autodetect(config, bus):
     """
         Autodetect chromecasts on the network and create backends for each
     """
@@ -156,6 +156,6 @@ def autodetect(config, emitter):
     ret = []
     for c in casts:
         LOG.info(c.name + " found.")
-        ret.append(ChromecastService(config, emitter, c.name.lower(), c))
+        ret.append(ChromecastService(config, bus, c.name.lower(), c))
 
     return ret

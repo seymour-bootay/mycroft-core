@@ -56,18 +56,17 @@ function help() {
     exit 1
 }
 
-_script=""
+_module=""
 function name-to-script-path() {
     case ${1} in
-        "bus")             _script=${DIR}/mycroft/messagebus/service/main.py ;;
-        "skills")          _script=${DIR}/mycroft/skills/main.py ;;
-        "audio")           _script=${DIR}/mycroft/audio/main.py ;;
-        "voice")           _script=${DIR}/mycroft/client/speech/main.py ;;
-        "cli")             _script=${DIR}/mycroft/client/text/main.py ;;
-        # "wifi")            _script=${DIR}/mycroft/client/wifisetup/main.py ;;
-        "audioaccuracytest") _script=${DIR}/mycroft/audio-accuracy-test/audio_accuracy_test.py ;;
-        "sdkdoc")          _script=${DIR}/doc/generate_sdk_docs.py ;;
-        "enclosure")       _script=${DIR}/mycroft/client/enclosure/main.py ;;
+        "bus")               _module="mycroft.messagebus.service" ;;
+        "skills")            _module="mycroft.skills" ;;
+        "audio")             _module="mycroft.audio" ;;
+        "voice")             _module="mycroft.client.speech" ;;
+        "cli")               _module="mycroft.client.text" ;;
+        "audiotest")         _module="mycroft.util.audio_test" ;;
+        "audioaccuracytest") _module="mycroft.audio-accuracy-test" ;;
+        "enclosure")         _module="mycroft.client.enclosure" ;;
 
         *)
             echo "Error: Unknown name '${1}'"
@@ -86,7 +85,7 @@ first_time=true
 function launch-process() {
     if ($first_time) ; then
         echo "Initializing..."
-        ${DIR}/scripts/prepare-msm.sh
+        "${DIR}/scripts/prepare-msm.sh"
         source-venv
         first_time=false
     fi
@@ -95,23 +94,22 @@ function launch-process() {
 
     # Launch process in foreground
     echo "Starting $1"
-    python3 ${_script} $_params
+    python3 -m ${_module} $_params
 }
 
 function launch-background() {
     if ($first_time) ; then
         echo "Initializing..."
-        ${DIR}/scripts/prepare-msm.sh
+        "${DIR}/scripts/prepare-msm.sh"
         source-venv
         first_time=false
     fi
 
+    # Check if given module is running and start (or restart if running)
     name-to-script-path ${1}
-
-    # Check if already running
-    if [[ $( ps aux ) == *${_script}* ]] ; then
+    if pgrep -f "python3 -m ${_module}" > /dev/null ; then
         echo "Restarting: ${1}"
-        source stop-mycroft.sh ${1}
+        "${DIR}/stop-mycroft.sh" ${1}
     else
         echo "Starting background service $1"
     fi
@@ -124,7 +122,7 @@ function launch-background() {
     fi
 
     # Launch process in background, sending logs to standard location
-    python3 ${_script} $_params >> /var/log/mycroft/${1}.log 2>&1 &
+    python3 -m ${_module} $_params >> /var/log/mycroft/${1}.log 2>&1 &
 }
 
 function launch-all() {
@@ -145,13 +143,25 @@ function launch-all() {
 }
 
 function check-dependencies() {
-  if [ ! -f .installed ] || ! md5sum -c &> /dev/null < .installed ; then
-    echo "Please update dependencies by running ./dev_setup.sh again."
-    if command -v notify-send >/dev/null ; then
-      notify-send "Mycroft Dependencies Outdated" "Run ./dev_setup.sh again"
+    if [ ! -f .installed ] || ! md5sum -c &> /dev/null < .installed ; then
+        # Critical files have changed, dev_setup.sh should be run again
+        if [ -f .dev_opts.json ] ; then
+            auto_update=$( jq -r ".auto_update" < .dev_opts.json 2> /dev/null)
+        else
+            auto_update="false"
+        fi
+
+        if [ "$auto_update" == "true" ] ; then
+            bash dev_setup.sh
+        else
+            echo "Please update dependencies by running ./dev_setup.sh again."
+            if command -v notify-send >/dev/null ; then
+                # Generate a desktop notification (ArchLinux)
+                notify-send "Mycroft Dependencies Outdated" "Run ./dev_setup.sh again"
+            fi
+            exit 1
+        fi
     fi
-    exit 1
-  fi
 }
 
 _opt=$1
@@ -200,14 +210,14 @@ case ${_opt} in
         pytest test/integrationtests/skills/discover_tests.py "$@"
         ;;
     "audiotest")
-        source-venv
-        python3 -m mycroft.util.audio_test "${@:1}"
+        launch-process ${_opt}
         ;;
     "audioaccuracytest")
         launch-process ${_opt}
         ;;
     "sdkdoc")
-        launch-process ${_opt}
+        source-venv
+        python3 "${DIR}/doc/generate_sdk_docs.py" ${_opt}
         ;;
     "enclosure")
         launch-background ${_opt}
