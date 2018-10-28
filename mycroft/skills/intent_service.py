@@ -31,6 +31,20 @@ class AdaptIntent(IntentBuilder):
         super().__init__(name)
 
 
+def workaround_one_of_context(best_intent):
+    """ Handle Adapt issue with context injection combined with one_of.
+
+    For all entries in the intent result where the value is None try to
+    populate using a value from the __tags__ structure.
+    """
+    for key in best_intent:
+        if best_intent[key] is None:
+            for t in best_intent['__tags__']:
+                if key in t:
+                    best_intent[key] = t[key][0]['entities'][0]['key']
+    return best_intent
+
+
 class ContextManager(object):
     """
     ContextManager
@@ -94,13 +108,21 @@ class ContextManager(object):
 
         missing_entities = list(missing_entities)
         context = []
+        last = ''
+        depth = 0
         for i in range(max_frames):
             frame_entities = [entity.copy() for entity in
                               relevant_frames[i].entities]
             for entity in frame_entities:
                 entity['confidence'] = entity.get('confidence', 1.0) \
-                    / (2.0 + i)
+                    / (2.0 + depth)
             context += frame_entities
+
+            # Update depth
+            if entity['origin'] != last or entity['origin'] == '':
+                depth += 1
+            last = entity['origin']
+            print(depth)
 
         result = []
         if len(missing_entities) > 0:
@@ -367,6 +389,12 @@ class IntentService(object):
             # update active skills
             skill_id = best_intent['intent_type'].split(":")[0]
             self.add_active_skill(skill_id)
+            # adapt doesn't handle context injection for one_of keywords
+            # correctly. Workaround this issue if possible.
+            try:
+                best_intent = workaround_one_of_context(best_intent)
+            except LookupError:
+                LOG.error('Error during workaround_one_of_context')
             return best_intent
 
     def handle_register_vocab(self, message):
@@ -408,12 +436,14 @@ class IntentService(object):
         entity = {'confidence': 1.0}
         context = message.data.get('context')
         word = message.data.get('word') or ''
+        origin = message.data.get('origin') or ''
         # if not a string type try creating a string from it
         if not isinstance(word, str):
             word = str(word)
         entity['data'] = [(word, context)]
         entity['match'] = word
         entity['key'] = word
+        entity['origin'] = origin
         self.context_manager.inject_context(entity)
 
     def handle_remove_context(self, message):

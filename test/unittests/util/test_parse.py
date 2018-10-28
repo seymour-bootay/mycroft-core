@@ -91,7 +91,7 @@ class TestNormalize(unittest.TestCase):
         self.assertEqual(extract_number("two million"), 2000000)
         self.assertEqual(extract_number("two million five hundred thousand "
                                         "tons of spinning metal"), 2500000)
-        self.assertEqual(extract_number("six trillion"), 60000000000.0)
+        self.assertEqual(extract_number("six trillion"), 6000000000000.0)
         self.assertEqual(extract_number("six trillion", short_scale=False),
                          6e+18)
         self.assertEqual(extract_number("one point five"), 1.5)
@@ -350,6 +350,20 @@ class TestNormalize(unittest.TestCase):
                     "2017-07-08 10:00:00", "remind me to call mom")
         testExtract("remind me to call mom at 10am next saturday",
                     "2017-07-08 10:00:00", "remind me to call mom")
+
+    def test_extract_ambiguous_time_en(self):
+        morning = datetime(2017, 6, 27, 8, 1, 2)
+        evening = datetime(2017, 6, 27, 20, 1, 2)
+        noonish = datetime(2017, 6, 27, 12, 1, 2)
+        self.assertEqual(
+            extract_datetime('feed fish at 10 o\'clock', morning)[0],
+            datetime(2017, 6, 27, 10, 0, 0))
+        self.assertEqual(
+            extract_datetime('feed fish at 10 o\'clock', noonish)[0],
+            datetime(2017, 6, 27, 22, 0, 0))
+        self.assertEqual(
+            extract_datetime('feed fish at 10 o\'clock', evening)[0],
+            datetime(2017, 6, 27, 22, 0, 0))
 
     def test_extract_relativedatetime_en(self):
         def extractWithFormat(text):

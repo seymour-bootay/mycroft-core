@@ -43,10 +43,18 @@ from mycroft.messagebus.message import Message
 from mycroft.skills.core import create_skill_descriptor, load_skill, \
     MycroftSkill, FallbackSkill
 from mycroft.skills.settings import SkillSettings
+from mycroft.configuration import Configuration
+
+from logging import StreamHandler
+from io import StringIO
+from contextlib import contextmanager
 
 MainModule = '__init__'
 
 DEFAULT_EVALUAITON_TIMEOUT = 30
+
+# Set a configuration value to allow skills to check if they're in a test
+Configuration.get()['test_env'] = True
 
 
 # Easy way to show colors on terminals
@@ -90,6 +98,20 @@ else:
     color = no_clr
 
 
+@contextmanager
+def temporary_handler(log, handler):
+    """Context manager to replace the default logger with a temporary logger.
+
+    Args:
+        log (LOG): mycroft LOG object
+        handler (logging.Handler): Handler object to use
+    """
+    old_handler = log.handler
+    log.handler = handler
+    yield
+    log.handler = old_handler
+
+
 def get_skills(skills_folder):
     """Find skills in the skill folder or sub folders.
 
@@ -131,16 +153,23 @@ def load_skills(emitter, skills_root):
             skills_root: Directory of the skills __init__.py
 
         Returns:
-            list: a list of loaded skills
+            tuple: (list of loaded skills, dict with logs for each skill)
 
     """
     skill_list = []
+    log = {}
     for skill in get_skills(skills_root):
         path = skill["path"]
         skill_id = 'test-' + basename(path)
-        skill_list.append(load_skill(skill, emitter, skill_id))
 
-    return skill_list
+        # Catch the logs during skill loading
+        from mycroft.skills.core import LOG as skills_log
+        buf = StringIO()
+        with temporary_handler(skills_log, StreamHandler(buf)):
+            skill_list.append(load_skill(skill, emitter, skill_id))
+        log[path] = buf.getvalue()
+
+    return skill_list, log
 
 
 def unload_skills(skills):
@@ -207,6 +236,8 @@ class MockSkillsLoader(object):
     """
 
     def __init__(self, skills_root):
+        self.load_log = None
+
         self.skills_root = skills_root
         self.emitter = InterceptEmitter()
         from mycroft.skills.intent_service import IntentService
@@ -224,8 +255,8 @@ class MockSkillsLoader(object):
         self.emitter.on('skill.converse.request', make_response)
 
     def load_skills(self):
-        self.skills = load_skills(self.emitter, self.skills_root)
-        self.skills = [s for s in self.skills if s]
+        skills, self.load_log = load_skills(self.emitter, self.skills_root)
+        self.skills = [s for s in skills if s]
         self.ps.train(Message('', data=dict(single_thread=True)))
         return self.emitter.emitter  # kick out the underlying emitter
 
@@ -258,11 +289,16 @@ class SkillTest(object):
             Args:
                 loader:  A list of loaded skills
         """
-
         s = [s for s in loader.skills if s and s.root_dir == self.skill]
         if s:
             s = s[0]
         else:
+            # The skill wasn't loaded, print the load log for the skill
+            if self.skill in loader.load_log:
+                print('\n {} Captured Logs from loading {}'.format('=' * 15,
+                                                                   '=' * 15))
+                print(loader.load_log.pop(self.skill))
+
             raise Exception('Skill couldn\'t be loaded')
 
         print("")
@@ -425,10 +461,19 @@ class EvaluationRule(object):
         if _x != ['and']:
             self.rule.append(_x)
 
-        if test_case.get('expected_response', None):
+        # Add rules from expeceted_response
+        # Accepts a string or a list of multiple strings
+        if isinstance(test_case.get('expected_response', None), str):
             self.rule.append(['match', 'utterance',
                               str(test_case['expected_response'])])
+        elif isinstance(test_case.get('expected_response', None), list):
+            texts = test_case['expected_response']
+            rules = [['match', 'utterance', str(r)] for r in texts]
+            self.rule.append(['or'] + rules)
 
+        # Add rules from expected_dialog
+        # Accepts dialog (without ".dialog"), the same way as self.speak_dialog
+        # as a string or a list of dialogs
         if test_case.get('expected_dialog', None):
             if not skill:
                 print(color.FAIL +
@@ -436,20 +481,25 @@ class EvaluationRule(object):
                       color.RESET)
             else:
                 # Check that expected dialog file is used
-                dialog = test_case['expected_dialog']
+                if isinstance(test_case['expected_dialog'], str):
+                    dialog = [test_case['expected_dialog']]  # Make list
+                else:
+                    dialog = test_case['expected_dialog']
                 # Extract dialog texts from skill
+                dialogs = []
                 try:
-                    dialogs = skill.dialog_renderer.templates[dialog]
+                    for d in dialog:
+                        dialogs += skill.dialog_renderer.templates[d]
                 except Exception as template_load_exception:
                     print(color.FAIL +
                           "Failed to load dialog template " +
-                          "'dialog/en-us/"+dialog+".dialog'" +
+                          "'dialog/en-us/" + d + ".dialog'" +
                           color.RESET)
                     raise Exception("Can't load 'excepected_dialog': "
-                                    "file '" + dialog + ".dialog'") \
+                                    "file '" + d + ".dialog'") \
                         from template_load_exception
                 # Allow custom fields to be anything
-                d = [re.sub('{.*?\}', '.*', t) for t in dialogs]
+                d = [re.sub(r'{.*?\}', r'.*', t) for t in dialogs]
                 # Create rule allowing any of the sentences for that dialog
                 rules = [['match', 'utterance', r] for r in d]
                 self.rule.append(['or'] + rules)
