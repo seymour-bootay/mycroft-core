@@ -221,11 +221,12 @@ class SkillManager(Thread):
         default_skill_errored = False
 
         def get_skill_data(skill_name):
+            """ Find skill data structure by name. """
             for e in self.msm.skills_data.get('skills', []):
                 if e.get('name') == skill_name:
                     return e
-            else:
-                return {}
+            # Nothing found return empty structure
+            return {}
 
         def install_or_update(skill):
             """Install missing defaults and update existing skills"""
